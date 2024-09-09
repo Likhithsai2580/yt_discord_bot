@@ -1,5 +1,4 @@
 # Discord Bot Video Manager
-
 This project provides a complete solution for managing video submissions and editor interactions through a Discord bot, paired with a web interface for monitoring and configuration. It enhances video content workflows for content creators, editors, and admins alike.
 
 ## Key Features
