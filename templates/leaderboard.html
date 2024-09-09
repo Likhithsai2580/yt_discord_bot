@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Top 10 Content Creators</h1>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Rank</th>
+            <th>Creator</th>
+            <th>Videos</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for i, (maker_id, count) in enumerate(results, 1) %}
+        <tr>
+            <td>{{ i }}</td>
+            <td>{{ maker_id }}</td>
+            <td>{{ count }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

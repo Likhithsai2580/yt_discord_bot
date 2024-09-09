@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Video Preview: {{ video.title }}</h1>
+<div class="embed-responsive embed-responsive-16by9">
+    <iframe class="embed-responsive-item" src="{{ video.gdrive_link }}" allowfullscreen></iframe>
+</div>
+<h2>Details</h2>
+<p><strong>Description:</strong> {{ video.description }}</p>
+<p><strong>Status:</strong> {{ video.status }}</p>
+<p><strong>Created at:</strong> {{ video.created_at }}</p>
+{% endblock %}

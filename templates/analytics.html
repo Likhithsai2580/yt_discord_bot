@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdn.plot.ly/plotly-latest.min.css">
+{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">Video Analytics</h1>
+<div id="line-chart" style="width:100%;height:400px;"></div>
+<div id="pie-chart" style="width:100%;height:400px;"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script>
+    var lineGraph = JSON.parse('{{ line_graph | safe }}');
+    Plotly.newPlot('line-chart', lineGraph.data, lineGraph.layout);
+
+    var pieGraph = JSON.parse('{{ pie_graph | safe }}');
+    Plotly.newPlot('pie-chart', pieGraph.data, pieGraph.layout);
+</script>
+{% endblock %}
