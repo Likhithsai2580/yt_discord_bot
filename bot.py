@@ -20,6 +20,16 @@ from flask_bcrypt import Bcrypt
 
 load_dotenv()
 
+# Use environment variables
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+GITHUB_USERNAME = os.getenv('GITHUB_USERNAME')
+EDITOR_CHANNEL_ID = os.getenv('EDITOR_CHANNEL_ID')
+THUMBNAIL_CHANNEL_ID = os.getenv('THUMBNAIL_CHANNEL_ID')
+GITHUB_ISSUES_CHANNEL_ID = os.getenv('GITHUB_ISSUES_CHANNEL_ID')
+TRUSTED_ROLE_ID = os.getenv('TRUSTED_ROLE_ID')
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+YOUTUBE_TOKEN_PATH = os.getenv('YOUTUBE_TOKEN_PATH')
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -41,21 +51,39 @@ config = {}
 # Thread pool for background tasks
 thread_pool = ThreadPoolExecutor(max_workers=5)
 
+# Load configuration
 def load_config():
-    config = {
-        'github_username': os.getenv('GITHUB_USERNAME', ''),
-        'editor_channel_id': os.getenv('EDITOR_CHANNEL_ID', ''),
-        'thumbnail_channel_id': os.getenv('THUMBNAIL_CHANNEL_ID', ''),
-        'github_issues_channel_id': os.getenv('GITHUB_ISSUES_CHANNEL_ID', ''),
-        'trusted_role_id': os.getenv('TRUSTED_ROLE_ID', ''),
-        'github_token': os.getenv('GITHUB_TOKEN', ''),
-        'youtube_token_path': os.getenv('YOUTUBE_TOKEN_PATH', '')
-    }
-    return {k: v for k, v in config.items() if v}  # Remove empty values
+    if os.path.exists('config.json'):
+        with open('config.json', 'r') as f:
+            return json.load(f)
+    return {}
 
+# Save configuration
 def save_config(config):
-    for key, value in config.items():
-        os.environ[key.upper()] = value
+    with open('config.json', 'w') as f:
+        json.dump(config, f, indent=4)
+
+# Initialize config
+config = load_config()
+
+# Define allowed configuration keys
+ALLOWED_CONFIG_KEYS = [
+    'support_channel_id',
+    'editor_channel_id',
+    'thumbnail_channel_id',
+    'github_issues_channel_id',
+    'trusted_role_id',
+    'github_token',
+    'youtube_token_path'
+]
+
+# Update configuration
+def update_config(key, value):
+    if key in ALLOWED_CONFIG_KEYS:
+        config[key] = value
+        save_config(config)
+        return True
+    return False
 
 @bot.event
 async def on_ready():
@@ -98,29 +126,33 @@ async def help(interaction: discord.Interaction):
 @bot.tree.command()
 @commands.has_permissions(administrator=True)
 async def config(interaction: discord.Interaction, setting: str, value: str):
-    if setting in config:
-        config[setting] = value
-        save_config(config)
-        embed = discord.Embed(title="Configuration Updated", color=discord.Color.green())
-        embed.add_field(name="Setting", value=setting, inline=True)
-        embed.add_field(name="New Value", value=value, inline=True)
-        await interaction.response.send_message(embed=embed)
-        if all(config.values()):
-            bot.loop.create_task(monitor_github_issues())
+    if interaction.user.guild_permissions.administrator:
+        if setting in ALLOWED_CONFIG_KEYS:
+            config[setting] = value
+            save_config(config)
+            embed = discord.Embed(title="Configuration Updated", color=discord.Color.green())
+            embed.add_field(name="Setting", value=setting, inline=True)
+            embed.add_field(name="New Value", value=value if setting not in ['github_token', 'youtube_token_path'] else '[REDACTED]', inline=True)
+            await interaction.response.send_message(embed=embed)
+        else:
+            embed = discord.Embed(title="Invalid Setting", color=discord.Color.red())
+            embed.description = f"The setting '{setting}' is not valid."
+            await interaction.response.send_message(embed=embed)
     else:
-        embed = discord.Embed(title="Invalid Setting", color=discord.Color.red())
-        embed.description = f"The setting '{setting}' is not valid."
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
 
 @bot.tree.command()
 @commands.has_permissions(administrator=True)
 async def show_config(interaction: discord.Interaction):
-    embed = discord.Embed(title="Current Configuration", color=discord.Color.blue())
-    for key, value in config.items():
-        if key in ['github_token', 'youtube_token_path']:
-            value = '[REDACTED]' if value else 'Not set'
-        embed.add_field(name=key.replace('_', ' ').title(), value=value, inline=False)
-    await interaction.response.send_message(embed=embed)
+    if interaction.user.guild_permissions.administrator:
+        embed = discord.Embed(title="Current Configuration", color=discord.Color.blue())
+        for key, value in config.items():
+            if key in ['github_token', 'youtube_token_path']:
+                value = '[REDACTED]' if value else 'Not set'
+            embed.add_field(name=key.replace('_', ' ').title(), value=value, inline=False)
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
 
 @bot.tree.command()
 async def submit_video(interaction: discord.Interaction):
@@ -314,35 +346,23 @@ async def monitor_github_issues():
 
 @bot.event
 async def on_message(message):
-    if not all(config.values()):
-        return
-
-    if message.channel.id == int(config['editor_channel_id']):
-        if message.attachments:
-            video_file = message.attachments[0]
-            thread_pool.submit(download_file, video_file.url, f"edited_{video_file.filename}")
-            c.execute('''UPDATE video SET editor = ?, edited_path = ?, status = 'edited'
-                         WHERE id = (SELECT id FROM video WHERE status = 'submitted' LIMIT 1)''',
-                      (str(message.author.id), f"edited_{video_file.filename}"))
-            conn.commit()
-            embed = discord.Embed(title="Edited Video Received", color=discord.Color.green())
-            embed.description = "The edited video has been received and is now downloading."
-            embed.set_footer(text=f"Edited by {message.author.name}")
-            await message.channel.send(embed=embed)
-
-    elif message.channel.id == int(config['thumbnail_channel_id']):
-        if message.attachments:
-            thumbnail_file = message.attachments[0]
-            thread_pool.submit(download_file, thumbnail_file.url, f"thumbnail_{thumbnail_file.filename}")
-            c.execute('''UPDATE video SET thumbnail_maker = ?, thumbnail_path = ?, status = 'thumbnail_added'
-                         WHERE id = (SELECT id FROM video WHERE status = 'edited' LIMIT 1)''',
-                      (str(message.author.id), f"thumbnail_{thumbnail_file.filename}"))
-            conn.commit()
-            embed = discord.Embed(title="Thumbnail Received", color=discord.Color.green())
-            embed.description = "The thumbnail has been received and is now downloading."
-            embed.set_footer(text=f"Created by {message.author.name}")
-            await message.channel.send(embed=embed)
-
+    if message.guild is None and message.author.guild_permissions.administrator:  # Check if it's a DM and from an admin
+        if message.content.startswith('!config'):
+            parts = message.content.split(maxsplit=2)
+            if len(parts) == 3:
+                setting, value = parts[1], parts[2]
+                if setting in ALLOWED_CONFIG_KEYS:
+                    config[setting] = value
+                    save_config(config)
+                    await message.channel.send(f"Configuration updated: {setting} = {value if setting not in ['github_token', 'youtube_token_path'] else '[REDACTED]'}")
+                else:
+                    await message.channel.send(f"Invalid setting: {setting}")
+            else:
+                await message.channel.send("Usage: !config <setting> <value>")
+        elif message.content == '!show_config':
+            config_str = "\n".join([f"{k}: {'[REDACTED]' if k in ['github_token', 'youtube_token_path'] else v}" 
+                                    for k, v in config.items()])
+            await message.channel.send(f"Current configuration:\n```\n{config_str}\n```")
     await bot.process_commands(message)
 
 def download_file(url, filename):
@@ -417,11 +437,13 @@ async def support_channel(ctx, channel: discord.TextChannel):
     await ctx.send(f"Support channel set to {channel.mention}")
 
 def run_discord_bot():
-    token = os.getenv('DISCORD_TOKEN')
-    if not token:
+    if not DISCORD_TOKEN:
         print("Discord token not found. Please set the DISCORD_TOKEN environment variable.")
         return
-    bot.run(token)
+    bot.run(DISCORD_TOKEN)
 
 if __name__ == '__main__':
     run_discord_bot()
+
+# Define admin_ids (you should populate this with actual admin user IDs)
+admin_ids = [123456789, 987654321]  # Replace with actual admin user IDs
