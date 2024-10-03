@@ -1,0 +1,51 @@
+name: Deploy Discord Bot
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run tests
+      run: |
+        pip install pytest
+        pytest
+    
+    - name: Set up environment variables
+      env:
+        DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
+        EDITOR_CHANNEL_ID: ${{ secrets.EDITOR_CHANNEL_ID }}
+        THUMBNAIL_CHANNEL_ID: ${{ secrets.THUMBNAIL_CHANNEL_ID }}
+        GITHUB_ISSUES_CHANNEL_ID: ${{ secrets.GITHUB_ISSUES_CHANNEL_ID }}
+        TRUSTED_ROLE_ID: ${{ secrets.TRUSTED_ROLE_ID }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+      run: |
+        echo "DISCORD_TOKEN=$DISCORD_TOKEN" >> .env
+        echo "GITHUB_USERNAME=$GITHUB_USERNAME" >> .env
+        echo "EDITOR_CHANNEL_ID=$EDITOR_CHANNEL_ID" >> .env
+        echo "THUMBNAIL_CHANNEL_ID=$THUMBNAIL_CHANNEL_ID" >> .env
+        echo "GITHUB_ISSUES_CHANNEL_ID=$GITHUB_ISSUES_CHANNEL_ID" >> .env
+        echo "TRUSTED_ROLE_ID=$TRUSTED_ROLE_ID" >> .env
+        echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> .env
+        echo "YOUTUBE_TOKEN=$YOUTUBE_TOKEN" >> .env
+    
+    - name: Run Discord bot
+      run: python bot.py

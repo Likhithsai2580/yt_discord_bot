@@ -15,6 +15,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 import matplotlib.pyplot as plt
 import io
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_bcrypt import Bcrypt
 
 load_dotenv()
 
@@ -40,31 +42,26 @@ config = {}
 thread_pool = ThreadPoolExecutor(max_workers=5)
 
 def load_config():
-    global config
-    try:
-        with open('config.json', 'r') as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        config = {
-            'github_username': None,
-            'editor_channel_id': None,
-            'thumbnail_channel_id': None,
-            'github_issues_channel_id': None,
-            'trusted_role_id': None,
-            'github_token': None,
-            'youtube_token_path': None
-        }
-        save_config()
+    config = {
+        'github_username': os.getenv('GITHUB_USERNAME', ''),
+        'editor_channel_id': os.getenv('EDITOR_CHANNEL_ID', ''),
+        'thumbnail_channel_id': os.getenv('THUMBNAIL_CHANNEL_ID', ''),
+        'github_issues_channel_id': os.getenv('GITHUB_ISSUES_CHANNEL_ID', ''),
+        'trusted_role_id': os.getenv('TRUSTED_ROLE_ID', ''),
+        'github_token': os.getenv('GITHUB_TOKEN', ''),
+        'youtube_token_path': os.getenv('YOUTUBE_TOKEN_PATH', '')
+    }
+    return {k: v for k, v in config.items() if v}  # Remove empty values
 
-def save_config():
-    with open('config.json', 'w') as f:
-        json.dump(config, f, indent=4)
+def save_config(config):
+    for key, value in config.items():
+        os.environ[key.upper()] = value
 
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     await bot.tree.sync()
-    load_config()
+    config = load_config()
     if all(config.values()):
         bot.loop.create_task(monitor_github_issues())
     else:
@@ -73,14 +70,29 @@ async def on_ready():
 @bot.tree.command()
 async def help(interaction: discord.Interaction):
     embed = discord.Embed(title="Video Manager Bot Help", color=discord.Color.blue())
-    embed.add_field(name="/config", value="Configure bot settings (Admin only)", inline=False)
-    embed.add_field(name="/submit_video", value="Submit a new video for editing", inline=False)
-    embed.add_field(name="/show_config", value="Display current configuration (Admin only)", inline=False)
-    embed.add_field(name="/video_status", value="Check the status of your submitted videos", inline=False)
-    embed.add_field(name="/leaderboard", value="Show the top 10 content creators", inline=False)
-    embed.add_field(name="/rate_editor", value="Rate an editor (1-5 stars)", inline=False)
-    embed.add_field(name="/video_analytics", value="View video submission analytics", inline=False)
-    embed.add_field(name="/help", value="Show this help message", inline=False)
+    embed.set_thumbnail(url=bot.user.avatar.url)
+    
+    commands = [
+        ("🎥 Video Management", [
+            ("/submit_video", "Submit a new video for editing"),
+            ("/video_status", "Check the status of your submitted videos"),
+            ("/video_analytics", "View video submission analytics"),
+        ]),
+        ("📊 Leaderboards & Ratings", [
+            ("/leaderboard", "Show the top 10 content creators"),
+            ("/rate_editor", "Rate an editor (1-5 stars)"),
+            ("/editor_leaderboard", "View top-rated editors"),
+        ]),
+        ("⚙️ Configuration", [
+            ("/config", "Configure bot settings (Admin only)"),
+            ("/show_config", "Display current configuration (Admin only)"),
+        ]),
+    ]
+    
+    for category, cmds in commands:
+        embed.add_field(name=category, value="\n".join([f"`{cmd}`: {desc}" for cmd, desc in cmds]), inline=False)
+    
+    embed.set_footer(text="Use /help <command> for more details on a specific command.")
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command()
@@ -88,7 +100,7 @@ async def help(interaction: discord.Interaction):
 async def config(interaction: discord.Interaction, setting: str, value: str):
     if setting in config:
         config[setting] = value
-        save_config()
+        save_config(config)
         embed = discord.Embed(title="Configuration Updated", color=discord.Color.green())
         embed.add_field(name="Setting", value=setting, inline=True)
         embed.add_field(name="New Value", value=value, inline=True)
@@ -179,18 +191,36 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command()
-async def rate_editor(interaction: discord.Interaction, editor: discord.Member, rating: int):
-    if rating < 1 or rating > 5:
-        await interaction.response.send_message("Rating must be between 1 and 5.", ephemeral=True)
-        return
-
+async def rate_editor(interaction: discord.Interaction, editor: discord.Member):
     c.execute('''
-        INSERT OR REPLACE INTO editor_ratings (editor_id, rater_id, rating)
-        VALUES (?, ?, ?)
-    ''', (str(editor.id), str(interaction.user.id), rating))
-    conn.commit()
+        SELECT rating FROM editor_ratings
+        WHERE editor_id = ? AND rater_id = ?
+    ''', (str(editor.id), str(interaction.user.id)))
+    current_rating = c.fetchone()
 
-    await interaction.response.send_message(f"You've rated {editor.name} with {rating} stars!", ephemeral=True)
+    embed = discord.Embed(title=f"Rate Editor: {editor.name}", color=discord.Color.blue())
+    embed.description = f"Current rating: {'Not rated' if current_rating is None else f'{current_rating[0]} ⭐'}"
+
+    class RatingDropdown(discord.ui.Select):
+        def __init__(self):
+            options = [discord.SelectOption(label=f"{i} Stars", value=str(i), emoji="⭐") for i in range(1, 6)]
+            super().__init__(placeholder="Select a rating", min_values=1, max_values=1, options=options)
+
+        async def callback(self, interaction: discord.Interaction):
+            rating = int(self.values[0])
+            c.execute('''
+                INSERT OR REPLACE INTO editor_ratings (editor_id, rater_id, rating)
+                VALUES (?, ?, ?)
+            ''', (str(editor.id), str(interaction.user.id), rating))
+            conn.commit()
+
+            embed = discord.Embed(title="Rating Submitted", color=discord.Color.green())
+            embed.description = f"You've rated {editor.name} with {rating} ⭐"
+            await interaction.response.edit_message(embed=embed, view=None)
+
+    view = discord.ui.View()
+    view.add_item(RatingDropdown())
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command()
 async def video_analytics(interaction: discord.Interaction):
@@ -216,6 +246,48 @@ async def video_analytics(interaction: discord.Interaction):
     
     file = discord.File(buf, filename="video_analytics.png")
     await interaction.response.send_message(file=file)
+
+@bot.tree.command()
+async def editor_leaderboard(interaction: discord.Interaction):
+    c.execute('''
+        SELECT editor_id, AVG(rating) as avg_rating, COUNT(*) as total_ratings
+        FROM editor_ratings
+        GROUP BY editor_id
+        ORDER BY avg_rating DESC, total_ratings DESC
+        LIMIT 10
+    ''')
+    results = c.fetchall()
+
+    embed = discord.Embed(title="Top 10 Editors", color=discord.Color.gold())
+    for i, (editor_id, avg_rating, total_ratings) in enumerate(results, 1):
+        user = await bot.fetch_user(int(editor_id))
+        embed.add_field(name=f"{i}. {user.name}", value=f"Rating: {avg_rating:.2f} ⭐ ({total_ratings} ratings)", inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command()
+async def video_info(interaction: discord.Interaction, video_id: int):
+    c.execute('''SELECT * FROM video WHERE id = ?''', (video_id,))
+    video = c.fetchone()
+
+    if not video:
+        await interaction.response.send_message(f"No video found with ID {video_id}", ephemeral=True)
+        return
+
+    embed = discord.Embed(title=f"Video Information: {video[1]}", color=discord.Color.blue())
+    embed.add_field(name="Description", value=video[2], inline=False)
+    embed.add_field(name="Status", value=video[9], inline=True)
+    embed.add_field(name="Submitted by", value=f"<@{video[3]}>", inline=True)
+    
+    if video[4]:
+        embed.add_field(name="Editor", value=f"<@{video[4]}>", inline=True)
+    if video[5]:
+        embed.add_field(name="Thumbnail Creator", value=f"<@{video[5]}>", inline=True)
+    
+    embed.add_field(name="Google Drive Link", value=video[8], inline=False)
+    embed.add_field(name="Submitted at", value=video[10].strftime("%Y-%m-%d %H:%M:%S"), inline=True)
+
+    await interaction.response.send_message(embed=embed)
 
 async def monitor_github_issues():
     github_client = Github(config['github_token'])
@@ -317,4 +389,39 @@ async def upload_to_youtube(video_id):
 
     print(f"Video uploaded successfully! Video ID: {response_upload.get('id')}")
 
-bot.run(os.getenv('DISCORD_BOT_TOKEN'))
+@bot.command()
+async def support(ctx, *, title):
+    config = load_config()
+    support_channel_id = config.get('support_channel_id')
+    
+    if not support_channel_id:
+        await ctx.send("Support channel not configured. Please ask an admin to set it up.")
+        return
+
+    support_channel = bot.get_channel(int(support_channel_id))
+    if not support_channel:
+        await ctx.send("Support channel not found. Please ask an admin to check the configuration.")
+        return
+
+    thread_name = f"{ctx.author.display_name} | {title}"[:100]
+    thread = await support_channel.create_thread(name=thread_name, auto_archive_duration=1440)
+    await thread.add_user(ctx.author)
+    await thread.send(f"Support request from {ctx.author.mention}: {title}")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def support_channel(ctx, channel: discord.TextChannel):
+    config = load_config()
+    config['support_channel_id'] = str(channel.id)
+    save_config(config)
+    await ctx.send(f"Support channel set to {channel.mention}")
+
+def run_discord_bot():
+    token = os.getenv('DISCORD_TOKEN')
+    if not token:
+        print("Discord token not found. Please set the DISCORD_TOKEN environment variable.")
+        return
+    bot.run(token)
+
+if __name__ == '__main__':
+    run_discord_bot()

@@ -18,10 +18,14 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import plotly.express as px
 import pandas as pd
 from flask import abort
+import threading
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.urandom(24)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///videos.db'
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24))
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///videos.db')
 db = SQLAlchemy(app)
 Bootstrap(app)
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
@@ -110,12 +114,20 @@ class VideoSubmissionForm(FlaskForm):
     submit = SubmitField('Submit Video')
 
 def load_config():
-    with open('config.json', 'r') as f:
-        return json.load(f)
+    config = {
+        'github_username': os.getenv('GITHUB_USERNAME', ''),
+        'editor_channel_id': os.getenv('EDITOR_CHANNEL_ID', ''),
+        'thumbnail_channel_id': os.getenv('THUMBNAIL_CHANNEL_ID', ''),
+        'github_issues_channel_id': os.getenv('GITHUB_ISSUES_CHANNEL_ID', ''),
+        'trusted_role_id': os.getenv('TRUSTED_ROLE_ID', ''),
+        'github_token': os.getenv('GITHUB_TOKEN', ''),
+        'youtube_token_path': os.getenv('YOUTUBE_TOKEN_PATH', '')
+    }
+    return {k: v for k, v in config.items() if v}  # Remove empty values
 
 def save_config(config):
-    with open('config.json', 'w') as f:
-        json.dump(config, f, indent=4)
+    for key, value in config.items():
+        os.environ[key.upper()] = value
 
 @app.route('/')
 def index():
@@ -279,6 +291,11 @@ def submit_video():
 with app.app_context():
     db.create_all()
     create_admin_user()
+
+def run_bot():
+    # Import the bot code here to avoid circular imports
+    from bot import run_discord_bot
+    run_discord_bot()
 
 if __name__ == '__main__':
     app.run(debug=True)
