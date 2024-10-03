@@ -1,4 +1,4 @@
-name: Deploy Discord Bot
+name: Deploy Discord Bot and Web Server
 
 on:
   push:
@@ -37,6 +37,8 @@ jobs:
         TRUSTED_ROLE_ID: ${{ secrets.TRUSTED_ROLE_ID }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        SECRET_KEY: ${{ secrets.SECRET_KEY }}
       run: |
         echo "DISCORD_TOKEN=$DISCORD_TOKEN" >> .env
         echo "GITHUB_USERNAME=$GITHUB_USERNAME" >> .env
@@ -46,6 +48,10 @@ jobs:
         echo "TRUSTED_ROLE_ID=$TRUSTED_ROLE_ID" >> .env
         echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> .env
         echo "YOUTUBE_TOKEN=$YOUTUBE_TOKEN" >> .env
+        echo "DATABASE_URL=$DATABASE_URL" >> .env
+        echo "SECRET_KEY=$SECRET_KEY" >> .env
     
-    - name: Run Discord bot
-      run: python bot.py
+    - name: Run Discord bot and Web Server
+      run: |
+        python bot.py &
+        python web_interface.py
