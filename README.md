@@ -13,6 +13,11 @@ This project provides a complete solution for managing video submissions and edi
 - **Video Analytics Dashboard** with interactive graphs and performance metrics.
 - **Video Preview Functionality** allowing quick previews of edited content.
 - **Role-Based Access Control** for managing permissions across bot and web interface features.
+- **Notification System** to inform users about important events like video status updates, new comments, and assigned tasks.
+- **Enhanced Analytics** with more detailed insights, such as video performance metrics, user engagement, and editor efficiency.
+- **Responsive Design** ensuring the web interface works well on mobile devices.
+- **User-Friendly Forms** with better validation, error handling, and user feedback.
+- **Interactive Elements** like drag-and-drop file uploads, real-time updates, and progress indicators.
 
 ## Setup
 
@@ -61,12 +66,16 @@ This project provides a complete solution for managing video submissions and edi
   - `/leaderboard`: See the top 10 content creators by video performance.
   - `/rate_editor`: Rate an editor’s work after reviewing the edited video.
   - `/video_analytics`: Get detailed video submission analytics.
+  - `/video_info`: Get detailed information about a specific video.
+  - `/support`: Create a support request.
 
 - **Web Interface**:
   - **Dashboard**: View video submission statuses, see editor ratings, and analyze video performance through graphs.
   - **Configuration Management**: Update bot settings, GitHub issue tracking, YouTube API keys, etc.
   - **Leaderboard**: Track top creators and editors based on ratings and submissions.
   - **Video Preview**: Review submitted and edited videos before final approval.
+  - **Submit Video**: Submit new videos for editing.
+  - **Analytics**: View detailed video performance metrics and user engagement.
 
 ## Additional Features
 
