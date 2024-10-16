@@ -1,6 +1,8 @@
 import discord
 from discord.ext import commands
-import sqlite3
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
 import aiohttp
 import asyncio
 import os
@@ -35,15 +37,33 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Database setup
-conn = sqlite3.connect('videos.db', check_same_thread=False)
-c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS video
-             (id INTEGER PRIMARY KEY, title TEXT, description TEXT, maker TEXT, 
-              editor TEXT, thumbnail_maker TEXT, edited_path TEXT, thumbnail_path TEXT,
-              gdrive_link TEXT, status TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-c.execute('''CREATE TABLE IF NOT EXISTS editor_ratings
-             (editor_id TEXT, rater_id TEXT, rating INTEGER)''')
-conn.commit()
+DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///videos.db')
+engine = create_engine(DATABASE_URL)
+Session = sessionmaker(bind=engine)
+session = Session()
+Base = declarative_base()
+
+class Video(Base):
+    __tablename__ = 'video'
+    id = Column(Integer, primary_key=True)
+    title = Column(String(100), nullable=False)
+    description = Column(Text, nullable=False)
+    maker = Column(String(100), nullable=False)
+    editor = Column(String(100))
+    thumbnail_maker = Column(String(100))
+    edited_path = Column(String(200))
+    thumbnail_path = Column(String(200))
+    gdrive_link = Column(String(200), nullable=False)
+    status = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class EditorRating(Base):
+    __tablename__ = 'editor_ratings'
+    editor_id = Column(String(100), primary_key=True)
+    rater_id = Column(String(100), primary_key=True)
+    rating = Column(Integer, nullable=False)
+
+Base.metadata.create_all(engine)
 
 # Configuration
 config = {}
@@ -168,11 +188,15 @@ async def submit_video(interaction: discord.Interaction):
         gdrive_link = discord.ui.TextInput(label='Google Drive Link', placeholder='Paste the Google Drive link to your video')
 
         async def on_submit(self, interaction: discord.Interaction):
-            c.execute('''INSERT INTO video (title, description, maker, gdrive_link, status)
-                         VALUES (?, ?, ?, ?, ?)''',
-                      (self.title.value, self.description.value, str(interaction.user.id),
-                       self.gdrive_link.value, 'submitted'))
-            conn.commit()
+            new_video = Video(
+                title=self.title.value,
+                description=self.description.value,
+                maker=str(interaction.user.id),
+                gdrive_link=self.gdrive_link.value,
+                status='submitted'
+            )
+            session.add(new_video)
+            session.commit()
 
             editor_channel = bot.get_channel(int(config['editor_channel_id']))
             embed = discord.Embed(title="New Video Submitted", color=discord.Color.green())
@@ -191,29 +215,25 @@ async def submit_video(interaction: discord.Interaction):
 
 @bot.tree.command()
 async def video_status(interaction: discord.Interaction):
-    c.execute('''SELECT title, status FROM video WHERE maker = ? ORDER BY created_at DESC LIMIT 5''', (str(interaction.user.id),))
-    videos = c.fetchall()
+    videos = session.query(Video).filter_by(maker=str(interaction.user.id)).order_by(Video.created_at.desc()).limit(5).all()
 
     if not videos:
         await interaction.response.send_message("You haven't submitted any videos yet.")
         return
 
     embed = discord.Embed(title="Your Recent Video Submissions", color=discord.Color.blue())
-    for title, status in videos:
-        embed.add_field(name=title, value=f"Status: {status.capitalize()}", inline=False)
+    for video in videos:
+        embed.add_field(name=video.title, value=f"Status: {video.status.capitalize()}", inline=False)
 
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command()
 async def leaderboard(interaction: discord.Interaction):
-    c.execute('''
-        SELECT maker, COUNT(*) as video_count
-        FROM video
-        GROUP BY maker
-        ORDER BY video_count DESC
-        LIMIT 10
-    ''')
-    results = c.fetchall()
+    results = session.query(Video.maker, func.count(Video.id).label('video_count')) \
+        .group_by(Video.maker) \
+        .order_by(func.count(Video.id).desc()) \
+        .limit(10) \
+        .all()
 
     embed = discord.Embed(title="Top 10 Content Creators", color=discord.Color.gold())
     for i, (maker_id, count) in enumerate(results, 1):
@@ -224,14 +244,10 @@ async def leaderboard(interaction: discord.Interaction):
 
 @bot.tree.command()
 async def rate_editor(interaction: discord.Interaction, editor: discord.Member):
-    c.execute('''
-        SELECT rating FROM editor_ratings
-        WHERE editor_id = ? AND rater_id = ?
-    ''', (str(editor.id), str(interaction.user.id)))
-    current_rating = c.fetchone()
+    current_rating = session.query(EditorRating).filter_by(editor_id=str(editor.id), rater_id=str(interaction.user.id)).first()
 
     embed = discord.Embed(title=f"Rate Editor: {editor.name}", color=discord.Color.blue())
-    embed.description = f"Current rating: {'Not rated' if current_rating is None else f'{current_rating[0]} ⭐'}"
+    embed.description = f"Current rating: {'Not rated' if current_rating is None else f'{current_rating.rating} ⭐'}"
 
     class RatingDropdown(discord.ui.Select):
         def __init__(self):
@@ -240,11 +256,13 @@ async def rate_editor(interaction: discord.Interaction, editor: discord.Member):
 
         async def callback(self, interaction: discord.Interaction):
             rating = int(self.values[0])
-            c.execute('''
-                INSERT OR REPLACE INTO editor_ratings (editor_id, rater_id, rating)
-                VALUES (?, ?, ?)
-            ''', (str(editor.id), str(interaction.user.id), rating))
-            conn.commit()
+            editor_rating = session.query(EditorRating).filter_by(editor_id=str(editor.id), rater_id=str(interaction.user.id)).first()
+            if editor_rating:
+                editor_rating.rating = rating
+            else:
+                editor_rating = EditorRating(editor_id=str(editor.id), rater_id=str(interaction.user.id), rating=rating)
+                session.add(editor_rating)
+            session.commit()
 
             embed = discord.Embed(title="Rating Submitted", color=discord.Color.green())
             embed.description = f"You've rated {editor.name} with {rating} ⭐"
@@ -256,13 +274,10 @@ async def rate_editor(interaction: discord.Interaction, editor: discord.Member):
 
 @bot.tree.command()
 async def video_analytics(interaction: discord.Interaction):
-    c.execute('''
-        SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
-        FROM video
-        GROUP BY month
-        ORDER BY month
-    ''')
-    results = c.fetchall()
+    results = session.query(func.strftime('%Y-%m', Video.created_at).label('month'), func.count(Video.id).label('count')) \
+        .group_by('month') \
+        .order_by('month') \
+        .all()
 
     months, counts = zip(*results)
     plt.figure(figsize=(10, 5))
@@ -281,14 +296,11 @@ async def video_analytics(interaction: discord.Interaction):
 
 @bot.tree.command()
 async def editor_leaderboard(interaction: discord.Interaction):
-    c.execute('''
-        SELECT editor_id, AVG(rating) as avg_rating, COUNT(*) as total_ratings
-        FROM editor_ratings
-        GROUP BY editor_id
-        ORDER BY avg_rating DESC, total_ratings DESC
-        LIMIT 10
-    ''')
-    results = c.fetchall()
+    results = session.query(EditorRating.editor_id, func.avg(EditorRating.rating).label('avg_rating'), func.count(EditorRating.rating).label('total_ratings')) \
+        .group_by(EditorRating.editor_id) \
+        .order_by(func.avg(EditorRating.rating).desc(), func.count(EditorRating.rating).desc()) \
+        .limit(10) \
+        .all()
 
     embed = discord.Embed(title="Top 10 Editors", color=discord.Color.gold())
     for i, (editor_id, avg_rating, total_ratings) in enumerate(results, 1):
@@ -299,25 +311,24 @@ async def editor_leaderboard(interaction: discord.Interaction):
 
 @bot.tree.command()
 async def video_info(interaction: discord.Interaction, video_id: int):
-    c.execute('''SELECT * FROM video WHERE id = ?''', (video_id,))
-    video = c.fetchone()
+    video = session.query(Video).get(video_id)
 
     if not video:
         await interaction.response.send_message(f"No video found with ID {video_id}", ephemeral=True)
         return
 
-    embed = discord.Embed(title=f"Video Information: {video[1]}", color=discord.Color.blue())
-    embed.add_field(name="Description", value=video[2], inline=False)
-    embed.add_field(name="Status", value=video[9], inline=True)
-    embed.add_field(name="Submitted by", value=f"<@{video[3]}>", inline=True)
+    embed = discord.Embed(title=f"Video Information: {video.title}", color=discord.Color.blue())
+    embed.add_field(name="Description", value=video.description, inline=False)
+    embed.add_field(name="Status", value=video.status, inline=True)
+    embed.add_field(name="Submitted by", value=f"<@{video.maker}>", inline=True)
     
-    if video[4]:
-        embed.add_field(name="Editor", value=f"<@{video[4]}>", inline=True)
-    if video[5]:
-        embed.add_field(name="Thumbnail Creator", value=f"<@{video[5]}>", inline=True)
+    if video.editor:
+        embed.add_field(name="Editor", value=f"<@{video.editor}>", inline=True)
+    if video.thumbnail_maker:
+        embed.add_field(name="Thumbnail Creator", value=f"<@{video.thumbnail_maker}>", inline=True)
     
-    embed.add_field(name="Google Drive Link", value=video[8], inline=False)
-    embed.add_field(name="Submitted at", value=video[10].strftime("%Y-%m-%d %H:%M:%S"), inline=True)
+    embed.add_field(name="Google Drive Link", value=video.gdrive_link, inline=False)
+    embed.add_field(name="Submitted at", value=video.created_at.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
 
     await interaction.response.send_message(embed=embed)
 
@@ -374,8 +385,7 @@ def download_file(url, filename):
 
 async def upload_to_youtube(video_id):
     # Retrieve video info from database
-    c.execute("SELECT * FROM video WHERE id = ?", (video_id,))
-    video_data = c.fetchone()
+    video_data = session.query(Video).get(video_id)
 
     # Set up YouTube API client
     credentials = Credentials.from_authorized_user_file(config['youtube_token_path'], ['https://www.googleapis.com/auth/youtube.upload'])
@@ -384,8 +394,8 @@ async def upload_to_youtube(video_id):
     # Prepare video upload
     request_body = {
         'snippet': {
-            'title': video_data[1],
-            'description': video_data[2] + f"\n\nCredits:\nMaker: {bot.get_user(int(video_data[3])).name}\nEditor: {bot.get_user(int(video_data[4])).name}\nThumbnail: {bot.get_user(int(video_data[5])).name}",
+            'title': video_data.title,
+            'description': video_data.description + f"\n\nCredits:\nMaker: {bot.get_user(int(video_data.maker)).name}\nEditor: {bot.get_user(int(video_data.editor)).name}\nThumbnail: {bot.get_user(int(video_data.thumbnail_maker)).name}",
             'tags': ['YourChannelTag']
         },
         'status': {
@@ -394,7 +404,7 @@ async def upload_to_youtube(video_id):
     }
 
     # Upload video
-    media_file = MediaFileUpload(video_data[6])
+    media_file = MediaFileUpload(video_data.edited_path)
     response_upload = youtube.videos().insert(
         part='snippet,status',
         body=request_body,
@@ -404,7 +414,7 @@ async def upload_to_youtube(video_id):
     # Set thumbnail
     youtube.thumbnails().set(
         videoId=response_upload.get('id'),
-        media_body=MediaFileUpload(video_data[7])
+        media_body=MediaFileUpload(video_data.thumbnail_path)
     ).execute()
 
     print(f"Video uploaded successfully! Video ID: {response_upload.get('id')}")

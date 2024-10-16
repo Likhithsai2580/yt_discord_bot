@@ -15,3 +15,5 @@ plotly==5.14.1
 pandas==2.0.2
 Flask-Bootstrap==3.3.7.1
 Werkzeug==2.3.6
+SQLAlchemy==1.4.32
+asyncpg==0.23.0
